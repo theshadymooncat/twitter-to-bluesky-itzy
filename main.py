@@ -1,10 +1,12 @@
 import os
 import json
-import asyncio
-from twscrape import API, gather
+import snscrape.modules.twitter as sntwitter
 from atproto import Client
 
-STATE_FILE = 'seen_ids.json'
+TWITTER_HANDLE = os.environ["TWITTER_HANDLE"]
+BLUESKY_HANDLE = os.environ["BLUESKY_HANDLE"]
+BLUESKY_PASSWORD = os.environ["BLUESKY_PASSWORD"]
+STATE_FILE = "seen_ids.json"
 
 def load_seen():
     try:
@@ -13,45 +15,42 @@ def load_seen():
         return set()
 
 def save_seen(seen):
-    with open(STATE_FILE, 'w') as f:
+    with open(STATE_FILE, "w") as f:
         json.dump(list(seen), f)
 
-async def fetch_tweets():
-    api = API()
-    await api.pool.add_account(
-        username=os.environ['TWITTER_USERNAME'],
-        password=os.environ['TWITTER_PASSWORD'],
-        email=os.environ.get('TWITTER_EMAIL', ''),
-        email_password=os.environ.get('TWITTER_EMAIL_PASSWORD', '')
-    )
-    await api.pool.login_all()
+def fetch_tweets():
+    tweets = []
+    try:
+        for tweet in sntwitter.TwitterUserScraper(TWITTER_HANDLE).get_items():
+            if len(tweets) >= 10:
+                break
+            if tweet.rawContent.startswith("RT @") or tweet.inReplyToTweetId:
+                continue
+            tweets.append({"id": str(tweet.id), "text": tweet.rawContent})
+        print(f"Fetched {len(tweets)} tweets from @{TWITTER_HANDLE}")
+    except Exception as e:
+        print(f"Error fetching tweets: {e}")
+    return tweets
 
-    handle = os.environ['TWITTER_HANDLE']
-    user = await api.user_by_login(handle)
-    if not user:
-        print(f"Could not find user @{handle}")
-        return []
-
-    tweets = await gather(api.user_tweets(user.id, limit=5))
-    print(f"Fetched {len(tweets)} tweets from @{handle}")
-    return [{'id': str(t.id), 'text': t.rawContent} for t in tweets]
-
-def post_to_bluesky(text: str):
-    bsky = Client()
-    bsky.login(os.environ['BLUESKY_HANDLE'], os.environ['BLUESKY_PASSWORD'])
-    bsky.post(text=text[:300])  # Bluesky has a 300 char limit
-    print("Posted to Bluesky:", text[:50])
+def post_to_bluesky(text):
+    try:
+        bsky = Client()
+        bsky.login(BLUESKY_HANDLE, BLUESKY_PASSWORD)
+        bsky.send_post(text=text[:300])
+        print("Posted to Bluesky:", text[:60])
+    except Exception as e:
+        print(f"Error posting to Bluesky: {e}")
 
 def main():
     seen = load_seen()
-    tweets = asyncio.run(fetch_tweets())
-    for tw in tweets:
-        if tw['id'] in seen:
+    tweets = fetch_tweets()
+    for tw in reversed(tweets):  # oldest first
+        if tw["id"] in seen:
             continue
-        print("Reposting tweet:", tw['text'])
-        post_to_bluesky(tw['text'])
-        seen.add(tw['id'])
+        print("Reposting:", tw["text"][:80])
+        post_to_bluesky(tw["text"])
+        seen.add(tw["id"])
     save_seen(seen)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
