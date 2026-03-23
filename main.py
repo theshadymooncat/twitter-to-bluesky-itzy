@@ -26,30 +26,47 @@ def save_seen(seen):
         json.dump(list(seen), f)
 
 
-def fetch_video_from_vxtwitter(tweet_path):
-    vx_url = "https://vxtwitter.com" + tweet_path
+def fetch_media_from_vxtwitter(tweet_path):
+    """
+    Use the api.vxtwitter.com JSON API to get media URLs for a tweet.
+    Returns (video_url, image_urls) where video_url may be None.
+    """
+    api_url = "https://api.vxtwitter.com" + tweet_path
     try:
-        print(f"Fetching video from vxtwitter: {vx_url}")
+        print(f"Fetching media from vxtwitter API: {api_url}")
         resp = requests.get(
-            vx_url,
+            api_url,
             headers={"User-Agent": "Mozilla/5.0"},
             timeout=10
         )
+        data = resp.json()
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        media_urls = data.get("mediaURLs", [])
+        video_url = None
+        image_urls = []
 
-        meta = soup.find("meta", property="og:video")
-        if meta:
-            return meta.get("content")
+        for url in media_urls:
+            if url.endswith(".mp4") or "video" in url:
+                if video_url is None:
+                    video_url = url
+            else:
+                image_urls.append(url)
 
-        meta = soup.find("meta", property="og:video:url")
-        if meta:
-            return meta.get("content")
+        # Also check the structured media array if present
+        for media in data.get("media_extended", []):
+            mtype = media.get("type", "")
+            url = media.get("url", "")
+            if mtype == "video" and video_url is None:
+                video_url = url
+            elif mtype == "image" and url not in image_urls:
+                image_urls.append(url)
+
+        return video_url, image_urls
 
     except Exception as e:
-        print(f"vxtwitter fetch failed: {e}")
+        print(f"vxtwitter API fetch failed: {e}")
 
-    return None
+    return None, []
 
 
 def fetch_tweets():
@@ -89,8 +106,16 @@ def fetch_tweets():
                         break
 
         if has_video and tweet_path:
-            video_url = fetch_video_from_vxtwitter(tweet_path)
+            video_url, api_images = fetch_media_from_vxtwitter(tweet_path)
+            if api_images and not images:
+                images = api_images
             print(f"Video detected → {video_url}")
+        elif tweet_path and not images:
+            # Try API for images too (catches cases where RSS missed them)
+            _, api_images = fetch_media_from_vxtwitter(tweet_path)
+            if api_images:
+                images = api_images
+                print(f"Images from API → {len(images)}")
         else:
             print("No video in tweet")
 
