@@ -9,7 +9,6 @@ from bs4 import BeautifulSoup
 from atproto import Client, models
 
 NITTER_RSS = "https://nitter.net/official_artms/rss"
-NITTER_BASE = "https://nitter.net"
 BLUESKY_HANDLE = os.environ["BLUESKY_HANDLE"]
 BLUESKY_PASSWORD = os.environ["BLUESKY_PASSWORD"]
 STATE_FILE = "seen_ids.json"
@@ -69,15 +68,19 @@ def fetch_tweets():
         images = []
         video_url = None
         tweet_path = None
+        has_video = False
 
-        # Get tweet path
+        # Detect video using RSS pattern
         for a in soup.find_all("a", href=True):
             if "/status/" in a["href"]:
                 tweet_path = a["href"].split("#")[0]
-                break
 
-        # Detect video
-        has_video = bool(soup.find("video"))
+                img = a.find("img")
+                if img:
+                    src = img.get("src", "")
+                    if "amplify_video_thumb" in src:
+                        has_video = True
+                        break
 
         if has_video and tweet_path:
             video_url = fetch_video_from_vxtwitter(tweet_path)
