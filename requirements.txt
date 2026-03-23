@@ -1,4 +1,2 @@
+feedparser
 atproto
-python-dotenv
-requests
-snscrape
