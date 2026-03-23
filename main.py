@@ -4,10 +4,9 @@ import re
 import requests
 import feedparser
 from bs4 import BeautifulSoup
-from atproto import Client
+from atproto import Client, models
 
 NITTER_RSS = "https://nitter.net/official_artms/rss"
-NITTER_BASE = "https://nitter.net"
 BLUESKY_HANDLE = os.environ["BLUESKY_HANDLE"]
 BLUESKY_PASSWORD = os.environ["BLUESKY_PASSWORD"]
 STATE_FILE = "seen_ids.json"
@@ -29,30 +28,54 @@ def fetch_tweets():
         if entry.title.startswith("RT by") or entry.title.startswith("R to"):
             continue
         tweet_id = entry.guid
-        text = entry.title
 
         # Parse images from description
         soup = BeautifulSoup(entry.description, "html.parser")
         images = []
         for img in soup.find_all("img"):
             src = img.get("src", "")
-            # Convert nitter image URLs to real twitter image URLs
             src = src.replace("https://nitter.net/pic/", "https://pbs.twimg.com/")
             src = requests.utils.unquote(src)
             images.append(src)
 
-        tweets.append({"id": tweet_id, "text": text, "images": images})
+        tweets.append({"id": tweet_id, "text": entry.title, "images": images})
 
     print(f"Fetched {len(tweets)} tweets")
     return tweets
+
+def parse_facets(text):
+    facets = []
+
+    # Detect URLs
+    for match in re.finditer(r'https?://[^\s]+', text):
+        start = len(text[:match.start()].encode("utf-8"))
+        end = len(text[:match.end()].encode("utf-8"))
+        facets.append({
+            "index": {"byteStart": start, "byteEnd": end},
+            "features": [{"$type": "app.bsky.richtext.facet#link", "uri": match.group()}]
+        })
+
+    # Detect hashtags
+    for match in re.finditer(r'#\w+', text):
+        tag = match.group()[1:]
+        start = len(text[:match.start()].encode("utf-8"))
+        end = len(text[:match.end()].encode("utf-8"))
+        facets.append({
+            "index": {"byteStart": start, "byteEnd": end},
+            "features": [{"$type": "app.bsky.richtext.facet#tag", "tag": tag}]
+        })
+
+    return facets
 
 def post_to_bluesky(text, images):
     try:
         bsky = Client()
         bsky.login(BLUESKY_HANDLE, BLUESKY_PASSWORD)
 
+        facets = parse_facets(text)
+
         image_blobs = []
-        for url in images[:4]:  # Bluesky max 4 images
+        for url in images[:4]:
             try:
                 resp = requests.get(url, timeout=10)
                 blob = bsky.upload_blob(resp.content)
@@ -60,21 +83,20 @@ def post_to_bluesky(text, images):
             except Exception as e:
                 print(f"Failed to upload image {url}: {e}")
 
+        embed = None
         if image_blobs:
-            from atproto import models
-            bsky.send_post(
-                text=text[:300],
-                embed=models.AppBskyEmbedImages.Main(
-                    images=[
-                        models.AppBskyEmbedImages.Image(
-                            image=blob,
-                            alt=""
-                        ) for blob in image_blobs
-                    ]
-                )
+            embed = models.AppBskyEmbedImages.Main(
+                images=[
+                    models.AppBskyEmbedImages.Image(image=blob, alt="")
+                    for blob in image_blobs
+                ]
             )
-        else:
-            bsky.send_post(text=text[:300])
+
+        bsky.send_post(
+            text=text[:300],
+            facets=facets if facets else None,
+            embed=embed
+        )
 
         print("Posted to Bluesky:", text[:60])
     except Exception as e:
