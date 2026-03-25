@@ -8,7 +8,7 @@ import feedparser
 from bs4 import BeautifulSoup
 from atproto import Client, models
 
-NITTER_RSS = "https://nitter.net/official_artms/rss"
+NITTER_RSS = "https://nitter.net/ITZYofficial/rss"
 BLUESKY_HANDLE = os.environ["BLUESKY_HANDLE"]
 BLUESKY_PASSWORD = os.environ["BLUESKY_PASSWORD"]
 STATE_FILE = "seen_ids.json"
