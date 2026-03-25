@@ -302,16 +302,24 @@ def parse_facets(text):
 
 def upload_video_to_bsky(bsky, video_path):
     """
-    Upload a video to the Bluesky video service using the session's access token.
-    POSTs directly to video.bsky.app, then polls until processing is complete.
+    Upload a video to the Bluesky video service.
+    Uses a service auth token with aud=did:web:video.bsky.app, which is what
+    the video endpoint requires (distinct from the PDS service auth).
     Returns (blob, width, height) on success, or (None, 0, 0) on failure.
     """
     try:
         import time
         width, height, _ = probe_video(video_path)
 
-        # The session access JWT is available on the client after login.
-        token = bsky._session.access_jwt
+        # Get a service auth token scoped specifically to the video service.
+        # aud must be "did:web:video.bsky.app" — the video endpoint rejects
+        # regular session JWTs and PDS-scoped tokens alike.
+        service_auth = bsky.com.atproto.server.get_service_auth(
+            aud="did:web:video.bsky.app",
+            lxm="app.bsky.video.uploadVideo",
+            exp=int(time.time()) + 60 * 30,
+        )
+        token = service_auth.token
         did = bsky.me.did
         filename = os.path.basename(video_path)
         file_size = os.path.getsize(video_path)
@@ -378,7 +386,6 @@ def upload_video_to_bsky(bsky, video_path):
         # blob_data from the video service looks like:
         # {"$type": "blob", "ref": {"$link": "<CID>"}, "mimeType": "video/mp4", "size": 12345}
         from atproto_client.models.blob_ref import BlobRef
-        from atproto_client.models.dot_dict import DotDict
         from atproto_core.cid import CID
 
         ref_link = blob_data.get("ref", {}).get("$link", "")
@@ -393,6 +400,8 @@ def upload_video_to_bsky(bsky, video_path):
     except Exception as e:
         print(f"Video upload error: {e}")
         import traceback
+        traceback.print_exc()
+        return None, 0, 0
         traceback.print_exc()
         return None, 0, 0
 
