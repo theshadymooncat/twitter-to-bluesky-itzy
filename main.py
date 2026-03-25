@@ -312,13 +312,26 @@ def upload_video_to_bsky(bsky, video_path):
     try:
         width, height, _ = probe_video(video_path)
 
-        # 1. Service auth token.
-        #    - aud: did:web:<PDS domain>  (NOT did:web:video.bsky.app)
-        #    - lxm: com.atproto.repo.uploadBlob  (the video service saves the
-        #      processed video to the user's PDS on their behalf)
+        # Resolve the user's actual PDS from plc.directory.
+        # bsky._base_url points to the AppView (bsky.social), not the PDS.
+        # The aud must be did:web:<PDS domain> where PDS is where the user's
+        # repo lives (e.g. did:web:verpa.us-west.host.bsky.network).
         from urllib.parse import urlparse
-        pds_domain = urlparse(bsky._base_url).hostname
+        did = bsky.me.did
+        plc_resp = requests.get(
+            f"https://plc.directory/{did}",
+            timeout=10,
+        )
+        plc_resp.raise_for_status()
+        plc_data = plc_resp.json()
+        pds_url = next(
+            s["serviceEndpoint"]
+            for s in plc_data.get("service", [])
+            if s.get("type") == "AtprotoPersonalDataServer"
+        )
+        pds_domain = urlparse(pds_url).hostname
         aud = f"did:web:{pds_domain}"
+        print(f"Using PDS: {pds_url} → aud={aud}")
 
         service_auth = bsky.com.atproto.server.get_service_auth(
             params={
@@ -330,7 +343,6 @@ def upload_video_to_bsky(bsky, video_path):
         token = service_auth.token
 
         # 2. Upload to the video service endpoint.
-        did = bsky.me.did
         filename = os.path.basename(video_path)
         file_size = os.path.getsize(video_path)
         upload_url = (
