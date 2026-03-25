@@ -302,19 +302,92 @@ def parse_facets(text):
 
 def upload_video_to_bsky(bsky, video_path):
     """
-    Upload a video blob directly to the PDS via uploadBlob.
-    The video service picks it up and processes it after the post is published.
+    Upload a video to the Bluesky video service using the session's access token.
+    POSTs directly to video.bsky.app, then polls until processing is complete.
     Returns (blob, width, height) on success, or (None, 0, 0) on failure.
     """
     try:
+        import time
         width, height, _ = probe_video(video_path)
+
+        # The session access JWT is available on the client after login.
+        token = bsky._session.access_jwt
+        did = bsky.me.did
+        filename = os.path.basename(video_path)
+        file_size = os.path.getsize(video_path)
+
+        upload_url = (
+            "https://video.bsky.app/xrpc/app.bsky.video.uploadVideo"
+            f"?did={did}&name={filename}"
+        )
 
         with open(video_path, "rb") as f:
             video_data = f.read()
 
-        upload = bsky.upload_blob(video_data)
-        blob = upload.blob
-        print(f"Uploaded video blob ({len(video_data) / 1024 / 1024:.1f} MB)")
+        print(f"Uploading {file_size / 1024 / 1024:.1f} MB to video service…")
+        resp = requests.post(
+            upload_url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "video/mp4",
+                "Content-Length": str(file_size),
+            },
+            data=video_data,
+            timeout=180,
+        )
+
+        if not resp.ok:
+            print(f"Video service upload failed: {resp.status_code} {resp.text}")
+            return None, 0, 0
+
+        job_status_data = resp.json().get("jobStatus", {})
+        job_id = job_status_data.get("jobId")
+        blob_data = job_status_data.get("blob")
+        print(f"Upload state: {job_status_data.get('state')} jobId={job_id}")
+
+        # Poll until the video service finishes processing and returns a blob.
+        if not blob_data and job_id:
+            for _ in range(90):
+                time.sleep(2)
+                status_resp = requests.get(
+                    "https://video.bsky.app/xrpc/app.bsky.video.getJobStatus",
+                    params={"jobId": job_id},
+                    timeout=10,
+                )
+                status = status_resp.json().get("jobStatus", {})
+                state = status.get("state", "")
+                progress = status.get("progress", "")
+                print(f"  {state} {progress}".rstrip())
+
+                blob_data = status.get("blob")
+                if blob_data:
+                    break
+
+                error = status.get("error", "")
+                if state == "JOB_STATE_FAILED" and error != "already_exists":
+                    print(f"Processing failed: {error} — {status.get('message')}")
+                    return None, 0, 0
+            else:
+                print("Timed out waiting for video processing")
+                return None, 0, 0
+
+        if not blob_data:
+            print("No blob returned from video service")
+            return None, 0, 0
+
+        # blob_data from the video service looks like:
+        # {"$type": "blob", "ref": {"$link": "<CID>"}, "mimeType": "video/mp4", "size": 12345}
+        from atproto_client.models.blob_ref import BlobRef
+        from atproto_client.models.dot_dict import DotDict
+        from atproto_core.cid import CID
+
+        ref_link = blob_data.get("ref", {}).get("$link", "")
+        blob = BlobRef(
+            mime_type=blob_data.get("mimeType", "video/mp4"),
+            size=blob_data.get("size", 0),
+            ref=CID.decode(ref_link),
+        )
+        print(f"Video ready: {ref_link}")
         return blob, width, height
 
     except Exception as e:
@@ -367,6 +440,7 @@ def post_to_bluesky(text, images, video_url):
                     ]
                 )
 
+        print(f"Sending post with embed type: {type(embed).__name__ if embed else None}")
         bsky.send_post(
             text=text[:300],
             facets=facets if facets else None,
