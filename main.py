@@ -3,7 +3,6 @@ import json
 import re
 import subprocess
 import tempfile
-import time
 import requests
 import feedparser
 from bs4 import BeautifulSoup
@@ -303,108 +302,19 @@ def parse_facets(text):
 
 def upload_video_to_bsky(bsky, video_path):
     """
-    Upload a video using the proper Bluesky video service flow:
-      1. Obtain a service auth token scoped to uploadBlob on the user's PDS
-      2. POST the video directly to https://video.bsky.app
-      3. Poll getJobStatus until processing completes and a BlobRef is returned
+    Upload a video blob directly to the PDS via uploadBlob.
+    The video service picks it up and processes it after the post is published.
     Returns (blob, width, height) on success, or (None, 0, 0) on failure.
     """
     try:
         width, height, _ = probe_video(video_path)
 
-        # Resolve the user's actual PDS from plc.directory.
-        # bsky._base_url points to the AppView (bsky.social), not the PDS.
-        # The aud must be did:web:<PDS domain> where PDS is where the user's
-        # repo lives (e.g. did:web:verpa.us-west.host.bsky.network).
-        from urllib.parse import urlparse
-        did = bsky.me.did
-        plc_resp = requests.get(
-            f"https://plc.directory/{did}",
-            timeout=10,
-        )
-        plc_resp.raise_for_status()
-        plc_data = plc_resp.json()
-        pds_url = next(
-            s["serviceEndpoint"]
-            for s in plc_data.get("service", [])
-            if s.get("type") == "AtprotoPersonalDataServer"
-        )
-        pds_domain = urlparse(pds_url).hostname
-        aud = f"did:web:{pds_domain}"
-        print(f"Using PDS: {pds_url} → aud={aud}")
-
-        service_auth = bsky.com.atproto.server.get_service_auth(
-            params={
-                "aud": aud,
-                "lxm": "com.atproto.repo.uploadBlob",
-                "exp": int(time.time()) + 60 * 30,
-            }
-        )
-        token = service_auth.token
-
-        # 2. Upload to the video service endpoint.
-        filename = os.path.basename(video_path)
-        file_size = os.path.getsize(video_path)
-        upload_url = (
-            "https://video.bsky.app/xrpc/app.bsky.video.uploadVideo"
-            f"?did={did}&name={filename}"
-        )
-
         with open(video_path, "rb") as f:
             video_data = f.read()
 
-        resp = requests.post(
-            upload_url,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "video/mp4",
-                "Content-Length": str(file_size),
-            },
-            data=video_data,
-            timeout=120,
-        )
-        resp.raise_for_status()
-        job_status_data = resp.json().get("jobStatus", {})
-        job_id = job_status_data.get("jobId")
-        blob_data = job_status_data.get("blob")
-        print(f"Upload response state: {job_status_data.get('state')}")
-
-        # 3. Poll until we have a blob.
-        #    Most videos return JOB_STATE_CREATED and need a few seconds to process.
-        #    already_exists (HTTP 409) also returns the blob — handle it too.
-        if not blob_data and job_id:
-            for _ in range(90):
-                time.sleep(2)
-                status_resp = requests.get(
-                    "https://video.bsky.app/xrpc/app.bsky.video.getJobStatus",
-                    params={"jobId": job_id},
-                    timeout=10,
-                )
-                status = status_resp.json().get("jobStatus", {})
-                state = status.get("state", "")
-                progress = status.get("progress", "")
-                print(f"  Job {state} {progress}".rstrip())
-
-                blob_data = status.get("blob")
-                if blob_data:
-                    break
-
-                error = status.get("error", "")
-                if state == "JOB_STATE_FAILED" and error != "already_exists":
-                    print(f"Video processing failed: {error} — {status.get('message')}")
-                    return None, 0, 0
-            else:
-                print("Timed out waiting for video processing")
-                return None, 0, 0
-
-        if not blob_data:
-            print("No blob returned from video service")
-            return None, 0, 0
-
-        # Convert the raw blob dict to an atproto BlobRef object.
-        # blob_data looks like: {"$type": "blob", "ref": {"$link": "..."}, "mimeType": "...", "size": ...}
-        from atproto_client.models.utils import get_or_create
-        blob = get_or_create(blob_data, strict=False)
+        upload = bsky.upload_blob(video_data)
+        blob = upload.blob
+        print(f"Uploaded video blob ({len(video_data) / 1024 / 1024:.1f} MB)")
         return blob, width, height
 
     except Exception as e:
