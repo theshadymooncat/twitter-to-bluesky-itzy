@@ -317,7 +317,7 @@ def upload_video_to_bsky(bsky, video_path):
         #    - lxm: com.atproto.repo.uploadBlob  (the video service saves the
         #      processed video to the user's PDS on their behalf)
         from urllib.parse import urlparse
-        pds_domain = urlparse(bsky.base_url).hostname
+        pds_domain = urlparse(bsky._base_url).hostname
         aud = f"did:web:{pds_domain}"
 
         service_auth = bsky.com.atproto.server.get_service_auth(
