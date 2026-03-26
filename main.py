@@ -184,10 +184,25 @@ def download_video(url):
         width, height, duration = probe_video(url)
         print(f"Source video: {width}x{height}, {duration:.1f}s")
 
-        if height > BSKY_MAX_HEIGHT:
-            scale_filter = f"scale=-2:{BSKY_MAX_HEIGHT}"
-            print(f"Downscaling to {BSKY_MAX_HEIGHT}p")
+        # "1080p" means the SHORT side is at most 1080.
+        # For vertical video (height > width), the short side is width.
+        # For horizontal video (width > height), the short side is height.
+        # scale=-2:1080 fixes height → wrong for portrait (squashes width to ~607)
+        # scale=1080:-2 fixes width → correct for portrait
+        short_side = min(width, height) if width and height else 0
+        is_vertical = height > width
+
+        if short_side > BSKY_MAX_HEIGHT:
+            if is_vertical:
+                # Limit width (short side) to 1080, height scales proportionally
+                scale_filter = f"scale={BSKY_MAX_HEIGHT}:-2"
+                print(f"Vertical video — downscaling width to {BSKY_MAX_HEIGHT}px")
+            else:
+                # Limit height (short side) to 1080, width scales proportionally
+                scale_filter = f"scale=-2:{BSKY_MAX_HEIGHT}"
+                print(f"Horizontal video — downscaling height to {BSKY_MAX_HEIGHT}px")
         else:
+            # Already within limits — just ensure even dimensions for libx264
             scale_filter = "scale=trunc(iw/2)*2:trunc(ih/2)*2"
 
         trim_duration = min(duration, BSKY_MAX_DURATION) if duration > 0 else BSKY_MAX_DURATION
