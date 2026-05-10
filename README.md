@@ -1,5 +1,7 @@
 # ARTMS Twitter → Bluesky Mirror Bot
 
+Cloned from https://github.com/theshadymooncat/twitter-to-bluesky-artms
+
 Automatically mirrors tweets from [@official_artms](https://x.com/official_artms) to Bluesky, including images, clickable hashtags, and hyperlinks.
 
 > ⚠️ This project was vibe coded with the help of [Claude](https://claude.ai) by someone who can't code well. It works though!
